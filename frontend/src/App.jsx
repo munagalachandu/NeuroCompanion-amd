@@ -147,8 +147,18 @@ const apiAnalyzeFrame = async (frameB64, sessionId) => {
 };
 
 const apiVision = async (file) => {
-  await new Promise(r => setTimeout(r, 1200));
-  return { raw_text:"Sample OCR text from image...", cleaned_text:"Photosynthesis is the process by which plants convert sunlight, water and CO₂ into glucose and oxygen, occurring in the chloroplasts using chlorophyll pigments." };
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch(`${API}/vision/read`, { method: "POST", body: formData });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Server error ${res.status}`);
+  }
+  const data = await res.json();
+  if (data.status !== "success" || !data.paragraphs?.length) {
+    throw new Error("No text extracted from document.");
+  }
+  return data.paragraphs;
 };
 
 /* ─────────────────────────────────────────────────────────────
@@ -665,55 +675,244 @@ const FocusModule = ({ theme }) => {
    VISION MODULE
 ───────────────────────────────────────────────────────────── */
 const VisionModule = ({ onPipeToSimplify, theme }) => {
-  const [file,setFile]=useState(null); const [preview,setPreview]=useState(null);
-  const [loading,setLoading]=useState(false); const [result,setResult]=useState(null);
-  const [speaking,setSpeaking]=useState(false);
+  const [file,setFile]=useState(null);
+  const [preview,setPreview]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [paragraphs,setParagraphs]=useState([]);
+  const [vStatus,setVStatus]=useState("idle"); // idle | uploading | ready | error
+  const [errorMsg,setErrorMsg]=useState("");
+  // TTS state
+  const [currentIdx,setCurrentIdx]=useState(0);
+  const [isPaused,setIsPaused]=useState(false);
+  const [isSpeaking,setIsSpeaking]=useState(false);
+  // Voice command state
+  const [isListening,setIsListening]=useState(false);
   const inputRef=useRef(null);
+  const parasRef=useRef([]);
+  const idxRef=useRef(0);
+  const recognitionRef=useRef(null);
+
   const { isDark }=theme;
   const border=isDark?"rgba(255,255,255,0.08)":"rgba(0,0,0,0.1)";
   const cardBg=isDark?"rgba(255,255,255,0.03)":"rgba(0,0,0,0.03)";
   const t40=isDark?"rgba(255,255,255,0.4)":"rgba(0,0,0,0.4)";
   const t70=isDark?"rgba(255,255,255,0.7)":"rgba(0,0,0,0.7)";
-  const onFile=f=>{ if(!f) return; setFile(f); setResult(null); const r=new FileReader(); r.onload=e=>setPreview(e.target.result); r.readAsDataURL(f); };
-  const onDrop=e=>{ e.preventDefault(); const f=e.dataTransfer.files[0]; if(f&&f.type.startsWith("image/")) onFile(f); };
-  const extract=async()=>{ if(!file) return; setLoading(true); setResult(null); const res=await apiVision(file); setResult(res); setLoading(false); };
-  const speak=()=>{ if(!result) return; if(speaking){window.speechSynthesis.cancel();setSpeaking(false);return;} const u=new SpeechSynthesisUtterance(result.cleaned_text); u.rate=0.88; u.onend=()=>setSpeaking(false); window.speechSynthesis.speak(u); setSpeaking(true); };
+
+  // ── TTS helpers ──────────────────────────────────────────
+  const speakAt = useCallback((paras, idx) => {
+    window.speechSynthesis.cancel();
+    if (idx >= paras.length) { setIsSpeaking(false); setIsPaused(false); return; }
+    const u = new SpeechSynthesisUtterance(paras[idx]);
+    u.rate = 0.88;
+    u.onstart = () => { setCurrentIdx(idx); idxRef.current = idx; setIsSpeaking(true); setIsPaused(false); };
+    u.onend   = () => { speakAt(paras, idx + 1); };
+    u.onerror = () => { setIsSpeaking(false); };
+    window.speechSynthesis.speak(u);
+  }, []);
+
+  const startReading = useCallback((paras, from=0) => {
+    parasRef.current = paras;
+    idxRef.current = from;
+    speakAt(paras, from);
+  }, [speakAt]);
+
+  const pauseReading  = ()=>{ window.speechSynthesis.pause();  setIsPaused(true);  };
+  const resumeReading = ()=>{ window.speechSynthesis.resume(); setIsPaused(false); };
+  const nextPara      = ()=>{ const next = idxRef.current + 1; if(next < parasRef.current.length) speakAt(parasRef.current, next); };
+  const repeatPara    = ()=>{ speakAt(parasRef.current, idxRef.current); };
+  const stopReading   = ()=>{ window.speechSynthesis.cancel(); setIsSpeaking(false); setIsPaused(false); setCurrentIdx(0); idxRef.current=0; };
+
+  // ── Voice commands ───────────────────────────────────────
+  const startListening = useCallback(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    const rec = new SR();
+    rec.continuous = true; rec.interimResults = false; rec.lang = "en-US";
+    rec.onresult = (e) => {
+      const cmd = e.results[e.results.length-1][0].transcript.trim().toLowerCase();
+      if (cmd.includes("pause"))  pauseReading();
+      if (cmd.includes("resume")) resumeReading();
+      if (cmd.includes("next"))   nextPara();
+      if (cmd.includes("repeat")) repeatPara();
+      if (cmd.includes("stop"))   stopReading();
+    };
+    rec.onend = () => { if(recognitionRef.current===rec) { try{ rec.start(); }catch{} } };
+    rec.start();
+    recognitionRef.current = rec;
+    setIsListening(true);
+  }, []);
+
+  const stopListening = useCallback(() => {
+    if (recognitionRef.current) { recognitionRef.current.onend=null; recognitionRef.current.stop(); recognitionRef.current=null; }
+    setIsListening(false);
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => () => { window.speechSynthesis.cancel(); stopListening(); }, [stopListening]);
+
+  // ── File handling ─────────────────────────────────────────
+  const onFile = (f) => {
+    if (!f) return;
+    setFile(f); setVStatus("idle"); setParagraphs([]); setErrorMsg(""); stopReading();
+    if (f.type.startsWith("image/")) {
+      const r = new FileReader(); r.onload = e => setPreview(e.target.result); r.readAsDataURL(f);
+    } else {
+      setPreview(null);
+    }
+  };
+
+  const onDrop = (e) => { e.preventDefault(); onFile(e.dataTransfer.files[0]); };
+
+  const extract = async () => {
+    if (!file) return;
+    setLoading(true); setVStatus("uploading"); setParagraphs([]); setErrorMsg(""); stopReading();
+    try {
+      const paras = await apiVision(file);
+      setParagraphs(paras); parasRef.current = paras;
+      setVStatus("ready");
+      startListening();
+      startReading(paras, 0);
+    } catch (e) {
+      setErrorMsg(e.message); setVStatus("error");
+    }
+    setLoading(false);
+  };
+
+  const toggleMic = () => { isListening ? stopListening() : startListening(); };
+
+  const isReady = vStatus === "ready";
+  const progress = paragraphs.length ? ((currentIdx + 1) / paragraphs.length) * 100 : 0;
+
   return (
     <div style={{animation:"pageIn 0.4s both",minWidth:0}}>
-      <div onDrop={onDrop} onDragOver={e=>e.preventDefault()} onClick={()=>inputRef.current?.click()} style={{border:`2px dashed ${file?"#FF9F1C88":border}`,borderRadius:16,padding:"44px 24px",textAlign:"center",cursor:"pointer",marginBottom:14,background:file?"#FF9F1C06":cardBg,transition:"all 0.3s"}}
+
+      {/* ── Drop zone ── */}
+      <div onDrop={onDrop} onDragOver={e=>e.preventDefault()} onClick={()=>inputRef.current?.click()}
+        style={{border:`2px dashed ${file?"#FF9F1C88":border}`,borderRadius:16,padding:"44px 24px",textAlign:"center",cursor:"pointer",marginBottom:14,background:file?"#FF9F1C06":cardBg,transition:"all 0.3s"}}
         onMouseEnter={e=>e.currentTarget.style.borderColor="#FF9F1C88"}
         onMouseLeave={e=>e.currentTarget.style.borderColor=file?"#FF9F1C88":border}
       >
-        <input ref={inputRef} type="file" accept="image/*" onChange={e=>onFile(e.target.files[0])} style={{display:"none"}}/>
-        {preview?<img src={preview} alt="preview" style={{maxHeight:180,maxWidth:"100%",borderRadius:10,objectFit:"contain"}}/>:<>
-          <div style={{fontSize:36,color:"#FF9F1C",marginBottom:12,opacity:0.7}}>◉</div>
-          <div style={{fontFamily:"'Outfit',sans-serif",fontWeight:600,fontSize:15,marginBottom:6}}>Drop an image or click to upload</div>
-          <div style={{fontFamily:"'Outfit',sans-serif",fontSize:12,color:t40}}>Photos, screenshots, scanned documents, handwritten notes</div>
-        </>}
+        <input ref={inputRef} type="file" accept="image/*,.pdf" onChange={e=>onFile(e.target.files[0])} style={{display:"none"}} disabled={loading}/>
+        {preview
+          ? <img src={preview} alt="preview" style={{maxHeight:180,maxWidth:"100%",borderRadius:10,objectFit:"contain"}}/>
+          : <>
+              <div style={{fontSize:36,color:"#FF9F1C",marginBottom:12,opacity:0.7}}>◉</div>
+              <div style={{fontFamily:"'Outfit',sans-serif",fontWeight:600,fontSize:15,marginBottom:6}}>
+                {file ? `📄 ${file.name}` : "Drop a file or click to upload"}
+              </div>
+              <div style={{fontFamily:"'Outfit',sans-serif",fontSize:12,color:t40}}>
+                Photos, screenshots, scanned documents, handwritten notes, PDFs
+              </div>
+            </>
+        }
       </div>
+
+      {/* ── File info bar ── */}
       {file&&<div style={{display:"flex",gap:10,marginBottom:20}}>
-        <div style={{flex:1,fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:t40,padding:"10px 14px",background:cardBg,border:`1px solid ${border}`,borderRadius:8,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>📎 {file.name} — {(file.size/1024).toFixed(1)}KB</div>
-        <button onClick={()=>{setFile(null);setPreview(null);setResult(null);}} style={{background:cardBg,border:`1px solid ${border}`,color:t40,borderRadius:8,padding:"10px 14px",fontSize:12,fontFamily:"'JetBrains Mono',monospace",flexShrink:0}}>✕</button>
+        <div style={{flex:1,fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:t40,padding:"10px 14px",background:cardBg,border:`1px solid ${border}`,borderRadius:8,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+          📎 {file.name} — {(file.size/1024).toFixed(1)}KB
+        </div>
+        <button onClick={()=>{setFile(null);setPreview(null);setParagraphs([]);setVStatus("idle");stopReading();}}
+          style={{background:cardBg,border:`1px solid ${border}`,color:t40,borderRadius:8,padding:"10px 14px",fontSize:12,fontFamily:"'JetBrains Mono',monospace",flexShrink:0}}>✕</button>
       </div>}
-      <button onClick={extract} disabled={!file||loading} style={{width:"100%",background:!file?cardBg:loading?"rgba(255,159,28,0.3)":"#FF9F1C",color:!file||loading?t40:"#07080d",border:"none",borderRadius:12,padding:"16px",fontFamily:"'Outfit',sans-serif",fontWeight:700,fontSize:15,marginBottom:24,transition:"all 0.3s",display:"flex",alignItems:"center",justifyContent:"center",gap:10}}>
-        {loading?<><span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>◎</span>Extracting…</>:"◉ Extract Text from Image"}
+
+      {/* ── Extract button ── */}
+      <button onClick={extract} disabled={!file||loading}
+        style={{width:"100%",background:!file?cardBg:loading?"rgba(255,159,28,0.3)":"#FF9F1C",color:!file||loading?t40:"#07080d",border:"none",borderRadius:12,padding:"16px",fontFamily:"'Outfit',sans-serif",fontWeight:700,fontSize:15,marginBottom:24,transition:"all 0.3s",display:"flex",alignItems:"center",justifyContent:"center",gap:10}}>
+        {loading
+          ? <><span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>◎</span>Extracting…</>
+          : "◉ Extract & Read Aloud"}
       </button>
-      {result&&<div style={{background:cardBg,border:"1.5px solid #FF9F1C44",borderRadius:18,overflow:"hidden",animation:"fadeUp 0.4s both"}}>
-        <div style={{padding:"16px 24px",borderBottom:"1px solid #FF9F1C22",background:"#FF9F1C08",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
-          <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}>
-            <span style={{color:"#FF9F1C",fontSize:18,flexShrink:0}}>◉</span>
-            <div style={{minWidth:0}}>
-              <div style={{fontFamily:"'Instrument Serif',serif",fontSize:17}}>Extracted & Cleaned</div>
-              <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:9,color:t40,marginTop:2,letterSpacing:"0.08em"}}>VISION AGENT → OCR → CLEANUP</div>
+
+      {/* ── Error ── */}
+      {vStatus==="error"&&<div style={{marginBottom:16,padding:"12px 18px",background:"#FF6B6B18",border:"1px solid #FF6B6B88",borderRadius:12,fontFamily:"'Outfit',sans-serif",fontSize:13,color:"#FF6B6B"}}>
+        ⚠ {errorMsg}
+      </div>}
+
+      {/* ── Playback controls ── */}
+      {isReady&&paragraphs.length>0&&(
+        <div style={{background:cardBg,border:"1.5px solid #FF9F1C44",borderRadius:18,overflow:"hidden",animation:"fadeUp 0.4s both",marginBottom:16}}>
+
+          {/* Header */}
+          <div style={{padding:"14px 22px",borderBottom:"1px solid #FF9F1C22",background:"#FF9F1C08",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}>
+              <span style={{color:"#FF9F1C",fontSize:18,flexShrink:0}}>◉</span>
+              <div style={{minWidth:0}}>
+                <div style={{fontFamily:"'Instrument Serif',serif",fontSize:17}}>Extracted & Reading</div>
+                <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:9,color:t40,marginTop:2,letterSpacing:"0.08em"}}>VISION AGENT → OCR → TTS</div>
+              </div>
             </div>
+            <button onClick={()=>onPipeToSimplify(paragraphs.join("\n\n"))}
+              style={{background:"#C8F04418",border:"1px solid #C8F04455",color:"#C8F044",borderRadius:8,padding:"7px 12px",fontSize:12,fontFamily:"'JetBrains Mono',monospace",transition:"all 0.2s",flexShrink:0}}>
+              ✦ Simplify
+            </button>
           </div>
-          <div style={{display:"flex",gap:8,flexShrink:0}}>
-            <button onClick={speak} style={{background:speaking?"#FF9F1C":cardBg,border:`1px solid ${speaking?"#FF9F1C":border}`,color:speaking?"#07080d":t70,borderRadius:8,padding:"7px 12px",fontSize:12,fontFamily:"'JetBrains Mono',monospace",transition:"all 0.2s"}}>{speaking?"◈ stop":"◈ listen"}</button>
-            <button onClick={()=>onPipeToSimplify(result.cleaned_text)} style={{background:"#C8F04418",border:"1px solid #C8F04455",color:"#C8F044",borderRadius:8,padding:"7px 12px",fontSize:12,fontFamily:"'JetBrains Mono',monospace",transition:"all 0.2s"}}>✦ Simplify</button>
+
+          <div style={{padding:"18px 22px"}}>
+            {/* Progress bar */}
+            <div style={{height:4,background:border,borderRadius:2,marginBottom:8,overflow:"hidden"}}>
+              <div style={{height:"100%",background:"#FF9F1C",borderRadius:2,width:`${progress}%`,transition:"width 0.5s"}}/>
+            </div>
+            <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:10,color:t40,letterSpacing:"0.08em",marginBottom:16}}>
+              PARAGRAPH {currentIdx+1} OF {paragraphs.length}
+            </div>
+
+            {/* Playback buttons */}
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+              {!isPaused
+                ? <button onClick={pauseReading}  style={{flex:1,background:"#FF9F1C",color:"#07080d",border:"none",borderRadius:10,padding:"11px 10px",fontFamily:"'Outfit',sans-serif",fontWeight:700,fontSize:13,minWidth:80}}>⏸ Pause</button>
+                : <button onClick={resumeReading} style={{flex:1,background:"#FF9F1C",color:"#07080d",border:"none",borderRadius:10,padding:"11px 10px",fontFamily:"'Outfit',sans-serif",fontWeight:700,fontSize:13,minWidth:80}}>▶ Resume</button>
+              }
+              <button onClick={repeatPara} style={{flex:1,background:cardBg,border:`1px solid ${border}`,color:t70,borderRadius:10,padding:"11px 10px",fontFamily:"'Outfit',sans-serif",fontWeight:600,fontSize:13,minWidth:80}}>🔁 Repeat</button>
+              <button onClick={nextPara}   style={{flex:1,background:cardBg,border:`1px solid ${border}`,color:t70,borderRadius:10,padding:"11px 10px",fontFamily:"'Outfit',sans-serif",fontWeight:600,fontSize:13,minWidth:80}}>⏭ Next</button>
+              <button onClick={stopReading} style={{flex:1,background:"#FF6B6B18",border:"1px solid #FF6B6B55",color:"#FF6B6B",borderRadius:10,padding:"11px 10px",fontFamily:"'Outfit',sans-serif",fontWeight:600,fontSize:13,minWidth:80}}>⏹ Stop</button>
+            </div>
+
+            {/* Voice command toggle */}
+            <button onClick={toggleMic}
+              style={{width:"100%",background:isListening?"#FF9F1C18":cardBg,border:`1px solid ${isListening?"#FF9F1C66":border}`,color:isListening?"#FF9F1C":t40,borderRadius:8,padding:"9px 16px",fontSize:12,fontFamily:"'JetBrains Mono',monospace",transition:"all 0.2s",display:"flex",alignItems:"center",justifyContent:"center",gap:8,marginBottom:10}}>
+              <span style={{fontSize:14}}>🎙</span>{isListening?"Voice Commands ON — click to disable":"Enable Voice Commands"}
+            </button>
+
+            {/* Voice commands help */}
+            {isListening&&(
+              <div style={{padding:"10px 14px",background:"#FF9F1C08",border:"1px solid #FF9F1C22",borderRadius:8,fontFamily:"'JetBrains Mono',monospace",fontSize:10,color:t40,letterSpacing:"0.06em"}}>
+                Say: <span style={{color:"#FF9F1C"}}>"Pause"</span> · <span style={{color:"#FF9F1C"}}>"Resume"</span> · <span style={{color:"#FF9F1C"}}>"Next"</span> · <span style={{color:"#FF9F1C"}}>"Repeat"</span> · <span style={{color:"#FF9F1C"}}>"Stop"</span>
+              </div>
+            )}
           </div>
         </div>
-        <div style={{padding:"24px"}}><div style={{fontFamily:"'Outfit',sans-serif",fontSize:14,color:t70,lineHeight:1.8,fontWeight:300}}><TypeWriter text={result.cleaned_text} speed={10}/></div></div>
-      </div>}
+      )}
+
+      {/* ── Paragraph list with active highlight ── */}
+      {isReady&&paragraphs.length>0&&(
+        <div style={{background:cardBg,border:`1px solid ${border}`,borderRadius:18,overflow:"hidden",animation:"fadeUp 0.5s both"}}>
+          <div style={{padding:"14px 22px",borderBottom:`1px solid ${border}`,background:isDark?"rgba(255,255,255,0.02)":"rgba(0,0,0,0.02)"}}>
+            <div style={{fontFamily:"'Instrument Serif',serif",fontSize:16}}>Extracted Text</div>
+            <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:9,color:t40,marginTop:2,letterSpacing:"0.08em"}}>VISION AGENT → OCR → CLEANUP</div>
+          </div>
+          <div style={{padding:"18px 22px",display:"flex",flexDirection:"column",gap:10,maxHeight:380,overflowY:"auto"}}>
+            {paragraphs.map((p,i)=>(
+              <div key={i}
+                onClick={()=>speakAt(parasRef.current,i)}
+                style={{padding:"12px 16px",borderRadius:10,cursor:"pointer",transition:"all 0.25s",
+                  background: i===currentIdx&&isSpeaking?"#FF9F1C12":cardBg,
+                  border:`1.5px solid ${i===currentIdx&&isSpeaking?"#FF9F1C66":border}`,
+                  boxShadow: i===currentIdx&&isSpeaking?"0 0 16px #FF9F1C18":"none"
+                }}>
+                <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                  <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:10,color:i===currentIdx&&isSpeaking?"#FF9F1C":t40,marginTop:3,flexShrink:0,letterSpacing:"0.06em"}}>
+                    {String(i+1).padStart(2,"0")}
+                  </span>
+                  <span style={{fontFamily:"'Outfit',sans-serif",fontSize:14,color:i===currentIdx&&isSpeaking?t70:t40,lineHeight:1.75,fontWeight:i===currentIdx&&isSpeaking?400:300}}>
+                    {p}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
