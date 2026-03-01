@@ -14,7 +14,6 @@ It transforms dense study material into simplified, structured, and testable for
 
 Built for 💡 AMD Slingshot Hackathon — Social Good Track.
 
----
 <img width="1902" height="894" alt="image" src="https://github.com/user-attachments/assets/0e3552ec-5989-4a8a-8e4d-6ddd0a1c76fc" />
 
 # ✨ Core Idea
@@ -29,8 +28,6 @@ Helping students to:
 * Stay focused
 * Extract text from images
 * Practice via quizzes
-
----
 
 # 🧠 AI Architecture
 
@@ -91,13 +88,10 @@ RAG ensures:
 * Multi-LLM Support (Groq / Google etc.)
 * Modular agent architecture
 
----
-
 # 🧬 System Design
 
 Microservice-style modular AI:
 
-```
 Frontend (React)
         ↓
 API Gateway (FastAPI)
@@ -109,7 +103,6 @@ AI Agents
    └── Vision (OCR → Pipeline)
 ```
 
----
 <img width="1919" height="901" alt="image" src="https://github.com/user-attachments/assets/f617422a-33af-4aac-9bbd-4407e0315423" />
 <img width="1917" height="897" alt="image" src="https://github.com/user-attachments/assets/e9c746b4-dcb8-4c22-a410-db40245b610c" />
 <img width="1915" height="895" alt="image" src="https://github.com/user-attachments/assets/c6956d8b-0934-4ae4-99c8-a5a550faeb7a" />
@@ -120,12 +113,10 @@ AI Agents
 
 ## 1️⃣ Clone Repo
 
-```
 git clone <your-repo-url>
 cd neurocompanion
 ```
 
----
 
 ## 2️⃣ Backend Setup
 
@@ -158,7 +149,7 @@ npm install
 npm run dev
 ```
 
----
+
 
 Frontend runs on:
 
@@ -172,7 +163,6 @@ Backend runs on:
 http://localhost:8000
 ```
 
----
 
 # 📡 API Endpoints
 
@@ -192,7 +182,6 @@ Input:
 }
 ```
 
----
 
 ## Quiz Generate
 
@@ -200,7 +189,6 @@ Input:
 POST /quiz/generate
 ```
 
----
 
 ## Quiz Evaluate
 
@@ -216,8 +204,6 @@ POST /quiz/evaluate
 POST /vision
 ```
 
----
-
 # 🌍 Real World Impact
 
 Designed for:
@@ -226,7 +212,6 @@ Designed for:
 🧠 Neurodiverse learners
 🎓 Inclusive classrooms
 
----
 
 # 🏁 Hackathon Tag
 
@@ -234,7 +219,6 @@ Designed for:
 ✔ AI for Accessibility
 ✔ Agentic Systems
 
----
 
 # 💡 Future Scope
 
@@ -243,7 +227,6 @@ Designed for:
 * Voice input mode
 * Real-time classroom assist
 
----
 
 # ❤️ Built to make learning fair — not harder.
 
