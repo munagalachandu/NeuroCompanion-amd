@@ -101,7 +101,7 @@ AI Agents
    ├── Quiz (RAG + LLM)
    ├── Focus (Behavior tracking)
    └── Vision (OCR → Pipeline)
-```
+
 
 <img width="1919" height="901" alt="image" src="https://github.com/user-attachments/assets/f617422a-33af-4aac-9bbd-4407e0315423" />
 <img width="1917" height="897" alt="image" src="https://github.com/user-attachments/assets/e9c746b4-dcb8-4c22-a410-db40245b610c" />
