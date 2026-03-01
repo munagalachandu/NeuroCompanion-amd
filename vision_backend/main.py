@@ -16,7 +16,12 @@ app.add_middleware(
 )
 
 # Initialize EasyOCR reader (English)
-reader = easyocr.Reader(["en"], gpu=False)
+reader = None
+
+@app.on_event("startup")
+def load_reader():
+    global reader
+    reader = easyocr.Reader(["en"], gpu=False)
 
 SUPPORTED_IMAGE_TYPES = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
 
