@@ -5,6 +5,7 @@ import tempfile
 import os
 import re
 from pathlib import Path
+import pymupdf as fitz
 
 app = FastAPI(title="Blind-Friendly Vision Reader API")
 
@@ -28,20 +29,13 @@ SUPPORTED_IMAGE_TYPES = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
 
 def pdf_to_images(pdf_path: str) -> list[str]:
     """Convert PDF pages to image files."""
-    try:
-        import fitz  # PyMuPDF
-    except ImportError:
-        raise HTTPException(
-            status_code=500,
-            detail="PyMuPDF not installed. PDF support unavailable."
-        )
 
     doc = fitz.open(pdf_path)
     image_paths = []
     tmp_dir = tempfile.mkdtemp()
 
     for i, page in enumerate(doc):
-        mat = fitz.Matrix(2, 2)  # 2x zoom for better OCR
+        mat = fitz.Matrix(2, 2)
         pix = page.get_pixmap(matrix=mat)
         img_path = os.path.join(tmp_dir, f"page_{i}.png")
         pix.save(img_path)
