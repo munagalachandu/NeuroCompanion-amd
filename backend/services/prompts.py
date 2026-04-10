@@ -4,16 +4,19 @@ services/prompts.py
 All system prompts and user-prompt builders for Simplify and Quiz.
 
 Hardened for free LLM compatibility:
-- Groq (Llama 3.1 70B) — very reliable, follows JSON well at low temp
-- Gemini 1.5 Flash     — reliable, occasionally wraps in ```json``` (stripped in llm.py)
-- Ollama local models  — varies by model; prompts are maximally explicit to handle
-                         less capable models (mistral, phi3, gemma2, etc.)
+- Groq (Llama 3.1 70B) 
+- Gemini 1.5 Flash     
+- Ollama local models  
 
-JSON prompts repeat "no markdown fences" because open-source models ignore it ~20%
-of the time without the repetition.
+
+RAG update: simplify_user_prompt() and quiz_generate_user_prompt() now accept an
+optional `rag_context` str. When provided, the retrieved passages are injected
+between the instruction and the raw source text so the LLM grounds its output
+in the most relevant content rather than processing everything at once.
 """
 
 import json
+from typing import Optional
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -39,7 +42,12 @@ Rules you MUST follow without exception:
 """
 
 
-def simplify_user_prompt(text: str, mode: str, dyslexic_mode: bool) -> str:
+def simplify_user_prompt(
+    text: str,
+    mode: str,
+    dyslexic_mode: bool,
+    rag_context: Optional[str] = None,   # ← RAG addition (backward-compatible)
+) -> str:
     dyslexic_note = (
         "\n\nDYSLEXIC MODE ON: Short sentences only (max 15 words). "
         "Simplest words possible. No hyphens. Extra blank line between every section."
@@ -80,16 +88,25 @@ def simplify_user_prompt(text: str, mode: str, dyslexic_mode: bool) -> str:
 
     instruction = mode_instructions.get(mode, mode_instructions["paragraph"])
 
-    return (
-        f"OUTPUT FORMAT REQUESTED: {mode.upper()}\n\n"
-        f"INSTRUCTION:\n{instruction}{dyslexic_note}\n\n"
-        f"SOURCE TEXT:\n\"\"\"\n{text}\n\"\"\""
+    # ── RAG context block
+    rag_block = (
+        f"\n\nRELEVANT CONTEXT (retrieved from the student's document — "
+        f"use this as your primary source for simplification):\n"
+        f"{'─' * 60}\n"
+        f"{rag_context}\n"
+        f"{'─' * 60}"
+        if rag_context
+        else ""
     )
 
+    return (
+        f"OUTPUT FORMAT REQUESTED: {mode.upper()}\n\n"
+        f"INSTRUCTION:\n{instruction}{dyslexic_note}"
+        f"{rag_block}\n\n"
+        f"FULL SOURCE TEXT (for reference):\n\"\"\"\n{text}\n\"\"\""
+    )
 
-# ─────────────────────────────────────────────────────────────────────────────
 # QUIZ — GENERATE
-# ─────────────────────────────────────────────────────────────────────────────
 
 QUIZ_GENERATE_SYSTEM = """You are NeuroCompanion's Quiz Agent. You generate assessment
 questions from study material for students with diverse learning needs.
@@ -110,7 +127,12 @@ Question quality rules:
 """
 
 
-def quiz_generate_user_prompt(text: str, question_type: str, num_questions: int) -> str:
+def quiz_generate_user_prompt(
+    text: str,
+    question_type: str,
+    num_questions: int,
+    rag_context: Optional[str] = None,   # ← RAG addition (backward-compatible)
+) -> str:
     type_schemas = {
         "mcq": (
             '{"id": <integer starting at 1>, "type": "mcq", '
@@ -139,6 +161,17 @@ def quiz_generate_user_prompt(text: str, question_type: str, num_questions: int)
     schema = type_schemas.get(question_type, type_schemas["mcq"])
     q_label = question_type.replace("_", " ")
 
+    # ── RAG context block ─────────────────────────────────────────────────────
+    
+    rag_block = (
+        f"\nPRIORITY PASSAGES (retrieved via RAG — focus your questions on these topics):\n"
+        f"{'─' * 60}\n"
+        f"{rag_context}\n"
+        f"{'─' * 60}\n\n"
+        if rag_context
+        else ""
+    )
+
     return (
         f"Generate exactly {num_questions} {q_label} question(s) from the source text below.\n\n"
         f"Return ONLY the following JSON object — no markdown fences, no extra text:\n"
@@ -150,13 +183,11 @@ def quiz_generate_user_prompt(text: str, question_type: str, num_questions: int)
         f"  ]\n"
         f"}}\n\n"
         f"Each question object schema:\n{schema}\n\n"
-        f"SOURCE TEXT:\n\"\"\"\n{text}\n\"\"\""
+        f"{rag_block}"
+        f"FULL SOURCE TEXT:\n\"\"\"\n{text}\n\"\"\""
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
 # QUIZ — EVALUATE
-# ─────────────────────────────────────────────────────────────────────────────
 
 QUIZ_EVALUATE_SYSTEM = """You are NeuroCompanion's Quiz Evaluator. You grade student
 answers accurately and give warm, constructive feedback for neurodiverse learners.

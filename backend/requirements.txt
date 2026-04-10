@@ -1,27 +1,16 @@
-fastapi==0.111.0
-uvicorn[standard]==0.29.0
-python-multipart==0.0.9       # multipart file uploads
-python-dotenv==1.0.1
+# NeuroCompanion — Python dependencies
+# Install: pip install -r requirements.txt
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9        
+pydantic>=2.7.0
+python-dotenv>=1.0.0
 
-# ── Free LLM providers ────────────────────────────────────────
-# 1. Groq  — free tier, very fast, OpenAI-compatible API
-#    Sign up: https://console.groq.com  →  free API key, no card needed
-#    Models:  llama-3.1-70b-versatile, mixtral-8x7b-32768, gemma2-9b-it
-openai==1.30.1                # used for Groq AND Ollama (both are OpenAI-compatible)
 
-# 2. Google Gemini — free tier: 15 RPM, 1 million tokens/day on Flash
-#    Sign up: https://aistudio.google.com  →  "Get API key" (no card)
-google-generativeai==0.5.4
-
-# 3. Ollama — fully local, zero cost, no API key at all
-#    Install:  https://ollama.com/download  then  `ollama pull llama3.1`
-#    No extra Python package needed — uses the openai SDK against localhost
-
-# ── File parsing ─────────────────────────────────────────────
-pypdf2==3.0.1
-pdfplumber==0.11.0
-python-docx==1.1.0
-
-# ── Utilities ────────────────────────────────────────────────
-httpx==0.27.0
-pydantic==2.7.1
+openai>=1.30.0                   
+google-generativeai>=0.7.0      
+sentence-transformers>=2.7.0    
+                                 
+chromadb>=0.5.0                  
+pypdf>=4.2.0                  
+python-docx>=1.1.0               
