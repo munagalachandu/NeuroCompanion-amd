@@ -32,6 +32,7 @@ Helping students to:
 # 🧠 AI Architecture
 
 The platform uses:
+<img width="830" height="634" alt="image" src="https://github.com/user-attachments/assets/dbce7570-6e42-4d4f-809a-9a9b307d17cb" />
 
 👉 **RAG (Retrieval Augmented Generation)**
 👉 **LLM-based reasoning**
